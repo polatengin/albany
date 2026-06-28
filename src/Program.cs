@@ -20,6 +20,13 @@ var app = builder.Build();
 
 app.UseForwardedHeaders();
 
+app.MapGet("/", () => Results.Ok(new
+{
+  service = "albany-call-listener",
+  incomingCallWebhook = "/api/incoming-call",
+  callAutomationCallbacks = "/api/calls/callbacks"
+}));
+
 
 app.Run();
 
