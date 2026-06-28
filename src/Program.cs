@@ -10,11 +10,19 @@ if (string.IsNullOrWhiteSpace(connectionString))
   throw new InvalidOperationException("ACS_CONNECTION_STRING is required. Run 'make provision' first.");
 }
 
+var speechOptions = new SpeechOptions(
+  builder.Configuration["COGNITIVE_SERVICES_ENDPOINT"],
+  builder.Configuration["TTS_GREETING_TEXT"] ?? "Hello from Albany. Your call is connected.",
+  builder.Configuration["TTS_VOICE_NAME"] ?? "en-US-JennyNeural",
+  builder.Configuration["SPEECH_LOCALE"] ?? "en-US",
+  bool.TryParse(builder.Configuration["ENABLE_TRANSCRIPTION"], out var enableTranscription) && enableTranscription);
+
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
   options.ForwardedHeaders = ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedProto;
 });
 builder.Services.AddSingleton(new CallAutomationClient(connectionString));
+builder.Services.AddSingleton(speechOptions);
 
 var app = builder.Build();
 
@@ -24,12 +32,14 @@ app.MapGet("/", () => Results.Ok(new
 {
   service = "albany-call-listener",
   incomingCallWebhook = "/api/incoming-call",
-  callAutomationCallbacks = "/api/calls/callbacks"
+  callAutomationCallbacks = "/api/calls/callbacks",
+  speechEnabled = speechOptions.HasCognitiveServicesEndpoint
 }));
 
 app.MapPost("/api/incoming-call", async (
   HttpRequest request,
   IConfiguration configuration,
+  SpeechOptions speechOptions,
   CallAutomationClient callAutomationClient,
   ILoggerFactory loggerFactory) =>
 {
