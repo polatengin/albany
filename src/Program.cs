@@ -93,14 +93,85 @@ app.MapPost("/api/incoming-call", async (
   return Results.Ok(new { answeredCalls });
 });
 
-app.MapPost("/api/calls/callbacks", async (HttpRequest request, ILoggerFactory loggerFactory) =>
+app.MapPost("/api/calls/callbacks", async (
+  HttpRequest request,
+  CallAutomationClient callAutomationClient,
+  SpeechOptions speechOptions,
+  ILoggerFactory loggerFactory) =>
 {
   var logger = loggerFactory.CreateLogger("CallAutomationCallbacks");
   using var document = await ReadJsonBodyAsync(request);
 
   foreach (var eventElement in EnumerateEvents(document.RootElement))
   {
-    logger.LogInformation("Received call automation event {EventType}.", GetEventType(eventElement) ?? "unknown");
+    var eventType = GetEventType(eventElement);
+    logger.LogInformation("Received call automation event {EventType}.", eventType ?? "unknown");
+
+    if (eventType == "Microsoft.Communication.CallConnected")
+    {
+      if (!speechOptions.HasCognitiveServicesEndpoint)
+      {
+        logger.LogWarning("Skipping greeting because COGNITIVE_SERVICES_ENDPOINT is not configured.");
+        continue;
+      }
+
+      if (!TryGetCallConnectionId(eventElement, out var callConnectionId))
+      {
+        logger.LogWarning("CallConnected event did not include callConnectionId.");
+        continue;
+      }
+
+      var playSource = new TextSource(speechOptions.GreetingText, speechOptions.VoiceName);
+      var callMedia = callAutomationClient
+        .GetCallConnection(callConnectionId)
+        .GetCallMedia();
+
+      await callMedia.PlayToAllAsync(playSource);
+
+      logger.LogInformation("Started text-to-speech greeting on call {CallConnectionId} with voice {VoiceName}.", callConnectionId, speechOptions.VoiceName);
+
+      if (speechOptions.EnableTranscription)
+      {
+        await callMedia.StartTranscriptionAsync(new StartTranscriptionOptions
+        {
+          Locale = speechOptions.SpeechLocale,
+          OperationContext = "default-transcription"
+        });
+
+        logger.LogInformation("Started speech transcription on call {CallConnectionId} with locale {SpeechLocale}.", callConnectionId, speechOptions.SpeechLocale);
+      }
+
+      continue;
+    }
+
+    if (eventType is "Microsoft.Communication.PlayCompleted" or "Microsoft.Communication.PlayStarted")
+    {
+      logger.LogInformation("Text-to-speech event payload: {Payload}", eventElement.GetRawText());
+      continue;
+    }
+
+    if (eventType == "Microsoft.Communication.PlayFailed")
+    {
+      logger.LogWarning("Text-to-speech failed: {Payload}", eventElement.GetRawText());
+      continue;
+    }
+
+    if (eventType == "Microsoft.Communication.RecognizeCompleted")
+    {
+      logger.LogInformation("Speech recognition completed: {Payload}", eventElement.GetRawText());
+      continue;
+    }
+
+    if (eventType?.Contains("Transcription", StringComparison.OrdinalIgnoreCase) == true)
+    {
+      logger.LogInformation("Transcription event: {Payload}", eventElement.GetRawText());
+      continue;
+    }
+
+    if (eventType is "Microsoft.Communication.RecognizeFailed" or "Microsoft.Communication.RecognizeCanceled")
+    {
+      logger.LogWarning("Speech recognition event: {Payload}", eventElement.GetRawText());
+    }
   }
 
   return Results.Ok();
