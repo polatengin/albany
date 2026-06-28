@@ -2,3 +2,5 @@ bin/
 obj/
 
 .albany.env
+.localtunnel.log
+.localtunnel.pid
