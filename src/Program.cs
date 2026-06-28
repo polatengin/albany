@@ -21,6 +21,8 @@ var app = builder.Build();
 app.UseForwardedHeaders();
 
 
+app.Run();
+
 static async Task<JsonDocument> ReadJsonBodyAsync(HttpRequest request)
 {
   try
