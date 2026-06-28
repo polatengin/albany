@@ -27,6 +27,48 @@ app.MapGet("/", () => Results.Ok(new
   callAutomationCallbacks = "/api/calls/callbacks"
 }));
 
+app.MapPost("/api/incoming-call", async (
+  HttpRequest request,
+  IConfiguration configuration,
+  CallAutomationClient callAutomationClient,
+  ILoggerFactory loggerFactory) =>
+{
+  var logger = loggerFactory.CreateLogger("IncomingCalls");
+  using var document = await ReadJsonBodyAsync(request);
+
+  var answeredCalls = 0;
+
+  foreach (var eventElement in EnumerateEvents(document.RootElement))
+  {
+    var eventType = GetEventType(eventElement);
+    if (eventType == "Microsoft.EventGrid.SubscriptionValidationEvent")
+    {
+      var validationCode = eventElement.GetProperty("data").GetProperty("validationCode").GetString();
+      logger.LogInformation("Validated Event Grid subscription.");
+      return Results.Ok(new { validationResponse = validationCode });
+    }
+
+    if (eventType != "Microsoft.Communication.IncomingCall")
+    {
+      logger.LogInformation("Ignored Event Grid event {EventType}.", eventType ?? "unknown");
+      continue;
+    }
+
+    if (!TryGetIncomingCallContext(eventElement, out var incomingCallContext))
+    {
+      logger.LogWarning("Incoming call event did not include incomingCallContext.");
+      continue;
+    }
+
+    var callbackUri = BuildCallbackUri(request, configuration);
+    await callAutomationClient.AnswerCallAsync(incomingCallContext, callbackUri);
+
+    answeredCalls++;
+    logger.LogInformation("Answered incoming call. Callback URI: {CallbackUri}", callbackUri);
+  }
+
+  return Results.Ok(new { answeredCalls });
+});
 
 app.Run();
 
