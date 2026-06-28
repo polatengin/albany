@@ -164,6 +164,20 @@ static bool TryGetIncomingCallContext(JsonElement eventElement, out string incom
   return !string.IsNullOrWhiteSpace(incomingCallContext);
 }
 
+static bool TryGetCallConnectionId(JsonElement eventElement, out string callConnectionId)
+{
+  callConnectionId = string.Empty;
+
+  if (!eventElement.TryGetProperty("data", out var data) ||
+    !data.TryGetProperty("callConnectionId", out var callConnectionIdElement))
+  {
+    return false;
+  }
+
+  callConnectionId = callConnectionIdElement.GetString() ?? string.Empty;
+  return !string.IsNullOrWhiteSpace(callConnectionId);
+}
+
 static Uri BuildCallbackUri(HttpRequest request, IConfiguration configuration)
 {
   var configuredBaseUrl = configuration["CALLBACK_BASE_URL"];
@@ -176,4 +190,21 @@ static Uri BuildCallbackUri(HttpRequest request, IConfiguration configuration)
   var host = request.Headers["X-Forwarded-Host"].FirstOrDefault() ?? request.Host.Value;
 
   return new Uri($"{scheme}://{host}/api/calls/callbacks");
+}
+
+sealed record SpeechOptions(string? CognitiveServicesEndpoint, string GreetingText, string VoiceName, string SpeechLocale, bool EnableTranscription)
+{
+  public bool HasCognitiveServicesEndpoint => !string.IsNullOrWhiteSpace(CognitiveServicesEndpoint);
+
+  public bool TryGetCognitiveServicesEndpoint(out Uri cognitiveServicesEndpoint)
+  {
+    if (!string.IsNullOrWhiteSpace(CognitiveServicesEndpoint) &&
+      Uri.TryCreate(CognitiveServicesEndpoint, UriKind.Absolute, out cognitiveServicesEndpoint!))
+    {
+      return true;
+    }
+
+    cognitiveServicesEndpoint = null!;
+    return false;
+  }
 }
