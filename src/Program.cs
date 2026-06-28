@@ -12,7 +12,6 @@ if (string.IsNullOrWhiteSpace(connectionString))
 
 var speechOptions = new SpeechOptions(
   builder.Configuration["COGNITIVE_SERVICES_ENDPOINT"],
-  builder.Configuration["TTS_GREETING_TEXT"] ?? "Hello from Albany. Your call is connected.",
   builder.Configuration["TTS_VOICE_NAME"] ?? "en-US-JennyNeural",
   builder.Configuration["SPEECH_LOCALE"] ?? "en-US",
   bool.TryParse(builder.Configuration["ENABLE_TRANSCRIPTION"], out var enableTranscription) && enableTranscription);
@@ -109,37 +108,13 @@ app.MapPost("/api/calls/callbacks", async (
 
     if (eventType == "Microsoft.Communication.CallConnected")
     {
-      if (!speechOptions.HasCognitiveServicesEndpoint)
-      {
-        logger.LogWarning("Skipping greeting because COGNITIVE_SERVICES_ENDPOINT is not configured.");
-        continue;
-      }
-
       if (!TryGetCallConnectionId(eventElement, out var callConnectionId))
       {
         logger.LogWarning("CallConnected event did not include callConnectionId.");
         continue;
       }
 
-      var playSource = new TextSource(speechOptions.GreetingText, speechOptions.VoiceName);
-      var callMedia = callAutomationClient
-        .GetCallConnection(callConnectionId)
-        .GetCallMedia();
-
-      await callMedia.PlayToAllAsync(playSource);
-
-      logger.LogInformation("Started text-to-speech greeting on call {CallConnectionId} with voice {VoiceName}.", callConnectionId, speechOptions.VoiceName);
-
-      if (speechOptions.EnableTranscription)
-      {
-        await callMedia.StartTranscriptionAsync(new StartTranscriptionOptions
-        {
-          Locale = speechOptions.SpeechLocale,
-          OperationContext = "default-transcription"
-        });
-
-        logger.LogInformation("Started speech transcription on call {CallConnectionId} with locale {SpeechLocale}.", callConnectionId, speechOptions.SpeechLocale);
-      }
+      await IncomingCall(new CallLine(callAutomationClient, callConnectionId, speechOptions, logger));
 
       continue;
     }
@@ -178,6 +153,11 @@ app.MapPost("/api/calls/callbacks", async (
 });
 
 app.Run();
+
+static async Task IncomingCall(CallLine line)
+{
+  await line.SendVoiceOverLine("Hello from Albany. Your call is connected.");
+}
 
 static async Task<JsonDocument> ReadJsonBodyAsync(HttpRequest request)
 {
@@ -263,7 +243,68 @@ static Uri BuildCallbackUri(HttpRequest request, IConfiguration configuration)
   return new Uri($"{scheme}://{host}/api/calls/callbacks");
 }
 
-sealed record SpeechOptions(string? CognitiveServicesEndpoint, string GreetingText, string VoiceName, string SpeechLocale, bool EnableTranscription)
+sealed class CallLine
+{
+  private readonly CallAutomationClient callAutomationClient;
+  private readonly string callConnectionId;
+  private readonly SpeechOptions speechOptions;
+  private readonly ILogger logger;
+
+  public CallLine(CallAutomationClient callAutomationClient, string callConnectionId, SpeechOptions speechOptions, ILogger logger)
+  {
+    this.callAutomationClient = callAutomationClient;
+    this.callConnectionId = callConnectionId;
+    this.speechOptions = speechOptions;
+    this.logger = logger;
+  }
+
+  public async Task SendVoiceOverLine(string text)
+  {
+    if (!speechOptions.HasCognitiveServicesEndpoint)
+    {
+      logger.LogWarning("Skipping voice output because COGNITIVE_SERVICES_ENDPOINT is not configured.");
+      return;
+    }
+
+    var playSource = new TextSource(text, speechOptions.VoiceName);
+    var callMedia = callAutomationClient
+      .GetCallConnection(callConnectionId)
+      .GetCallMedia();
+
+    await callMedia.PlayToAllAsync(playSource);
+
+    logger.LogInformation("Started text-to-speech on call {CallConnectionId} with voice {VoiceName}.", callConnectionId, speechOptions.VoiceName);
+  }
+
+  public async Task ListenToLine()
+  {
+    if (!speechOptions.HasCognitiveServicesEndpoint)
+    {
+      logger.LogWarning("Skipping listening because COGNITIVE_SERVICES_ENDPOINT is not configured.");
+      return;
+    }
+
+    if (!speechOptions.EnableTranscription)
+    {
+      logger.LogInformation("Skipping listening because ENABLE_TRANSCRIPTION is not true.");
+      return;
+    }
+
+    var callMedia = callAutomationClient
+      .GetCallConnection(callConnectionId)
+      .GetCallMedia();
+
+    await callMedia.StartTranscriptionAsync(new StartTranscriptionOptions
+    {
+      Locale = speechOptions.SpeechLocale,
+      OperationContext = "default-transcription"
+    });
+
+    logger.LogInformation("Started speech transcription on call {CallConnectionId} with locale {SpeechLocale}.", callConnectionId, speechOptions.SpeechLocale);
+  }
+}
+
+sealed record SpeechOptions(string? CognitiveServicesEndpoint, string VoiceName, string SpeechLocale, bool EnableTranscription)
 {
   public bool HasCognitiveServicesEndpoint => !string.IsNullOrWhiteSpace(CognitiveServicesEndpoint);
 
