@@ -1,0 +1,19 @@
+{
+  "name": "Albany Dev Environment",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:2-11.0-preview-resolute",
+  "features": {
+    "ghcr.io/devcontainers/features/azure-cli:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:2": {},
+    "ghcr.io/devcontainer-community/devcontainer-features/apt-build-essential:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csharp",
+        "ms-dotnettools.csdevkit",
+        "ms-vscode.makefile-tools"
+      ]
+    }
+  }
+}
