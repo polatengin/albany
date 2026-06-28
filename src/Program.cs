@@ -71,7 +71,20 @@ app.MapPost("/api/incoming-call", async (
     }
 
     var callbackUri = BuildCallbackUri(request, configuration);
-    await callAutomationClient.AnswerCallAsync(incomingCallContext, callbackUri);
+    var answerCallOptions = new AnswerCallOptions(incomingCallContext, callbackUri);
+    if (speechOptions.TryGetCognitiveServicesEndpoint(out var cognitiveServicesEndpoint))
+    {
+      answerCallOptions.CallIntelligenceOptions = new CallIntelligenceOptions
+      {
+        CognitiveServicesEndpoint = cognitiveServicesEndpoint
+      };
+    }
+    else
+    {
+      logger.LogWarning("COGNITIVE_SERVICES_ENDPOINT is not set. The call will be answered, but text-to-speech and speech-to-text actions will be skipped.");
+    }
+
+    await callAutomationClient.AnswerCallAsync(answerCallOptions);
 
     answeredCalls++;
     logger.LogInformation("Answered incoming call. Callback URI: {CallbackUri}", callbackUri);
