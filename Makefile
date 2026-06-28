@@ -42,6 +42,4 @@ provision:
 run:
 	@[[ -f "$(STATE_FILE)" ]] || { echo "Run 'make provision' first." >&2; exit 1; }
 
-	@pushd ./src
-	@dotnet run
-	@popd
+	@dotnet run --project ./src/cli.csproj
