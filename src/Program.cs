@@ -70,6 +70,19 @@ app.MapPost("/api/incoming-call", async (
   return Results.Ok(new { answeredCalls });
 });
 
+app.MapPost("/api/calls/callbacks", async (HttpRequest request, ILoggerFactory loggerFactory) =>
+{
+  var logger = loggerFactory.CreateLogger("CallAutomationCallbacks");
+  using var document = await ReadJsonBodyAsync(request);
+
+  foreach (var eventElement in EnumerateEvents(document.RootElement))
+  {
+    logger.LogInformation("Received call automation event {EventType}.", GetEventType(eventElement) ?? "unknown");
+  }
+
+  return Results.Ok();
+});
+
 app.Run();
 
 static async Task<JsonDocument> ReadJsonBodyAsync(HttpRequest request)
