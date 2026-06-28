@@ -29,17 +29,17 @@ provision:
 		az communication create --name "$(ACS_NAME)" --resource-group "$(RESOURCE_GROUP_NAME)" --location global --data-location "UnitedStates"; \
 	fi
 
-	@ACS_CONNECTION_STRING="$$(az communication list-key --name "$(ACS_NAME)" --resource-group "$(RESOURCE_GROUP_NAME)" --query primaryConnectionString --output tsv)"
-
-	@printf '%s\n' \
-		"PROJECT_SUFFIX := $(PROJECT_SUFFIX)" \
-		"RESOURCE_GROUP_NAME := $(RESOURCE_GROUP_NAME)" \
-		"LOCATION := $(LOCATION)" \
-		"ACS_NAME := $(ACS_NAME)" \
-		"ACS_CONNECTION_STRING := ${ACS_CONNECTION_STRING}" \
+	@ACS_CONNECTION_STRING="$$(az communication list-key --name "$(ACS_NAME)" --resource-group "$(RESOURCE_GROUP_NAME)" --query primaryConnectionString --output tsv)" && \
+	printf '%s\n' \
+		"export PROJECT_SUFFIX=\"$(PROJECT_SUFFIX)\"" \
+		"export RESOURCE_GROUP_NAME=\"$(RESOURCE_GROUP_NAME)\"" \
+		"export LOCATION=\"$(LOCATION)\"" \
+		"export ACS_NAME=\"$(ACS_NAME)\"" \
+		"export ACS_CONNECTION_STRING=\"$$ACS_CONNECTION_STRING\"" \
+		"export PHONE_NUMBER=\"$(PHONE_NUMBER)\"" \
 		> "$(STATE_FILE)"
 
 run:
 	@[[ -f "$(STATE_FILE)" ]] || { echo "Run 'make provision' first." >&2; exit 1; }
 
-	@dotnet run --project ./src/cli.csproj
+	@source "$(STATE_FILE)" && dotnet run --project ./src/cli.csproj
