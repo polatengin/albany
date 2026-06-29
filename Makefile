@@ -2,6 +2,7 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
 STATE_FILE := .albany.env
+STATE_BACKUP_VARIABLE := ALBANY_STATE
 TUNNEL_LOG := .localtunnel.log
 TUNNEL_PID_FILE := .localtunnel.pid
 
@@ -17,13 +18,28 @@ ACS_NAME := $(if $(ACS_NAME),$(call unquote,$(ACS_NAME)),acs-albany-$(PROJECT_SU
 AI_SERVICES_NAME := $(if $(AI_SERVICES_NAME),$(call unquote,$(AI_SERVICES_NAME)),ai-albany-$(PROJECT_SUFFIX))
 AI_SERVICES_CUSTOM_DOMAIN := $(if $(AI_SERVICES_CUSTOM_DOMAIN),$(call unquote,$(AI_SERVICES_CUSTOM_DOMAIN)),ai-albany-$(PROJECT_SUFFIX))
 EVENT_SUBSCRIPTION_NAME := $(if $(EVENT_SUBSCRIPTION_NAME),$(call unquote,$(EVENT_SUBSCRIPTION_NAME)),acs-incoming-calls)
-TUNNEL_SUBDOMAIN := albany-$(PROJECT_SUFFIX)
-CALLBACK_BASE_URL := https://$(TUNNEL_SUBDOMAIN).loca.lt
+TUNNEL_SUBDOMAIN := $(if $(TUNNEL_SUBDOMAIN),$(call unquote,$(TUNNEL_SUBDOMAIN)),albany-$(PROJECT_SUFFIX))
+CALLBACK_BASE_URL := $(if $(CALLBACK_BASE_URL),$(call unquote,$(CALLBACK_BASE_URL)),https://$(TUNNEL_SUBDOMAIN).loca.lt)
 CALLBACK_ENDPOINT := $(CALLBACK_BASE_URL)/api/incoming-call
 PHONE_NUMBER := $(call unquote,$(PHONE_NUMBER))
 
 .PHONY: provision run
 provision:
+	@if [[ ! -f "$(STATE_FILE)" && "$${ALBANY_STATE_RESTORE_ATTEMPTED:-}" != "1" ]]; then \
+		if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then \
+			tmp_state="$$(mktemp)"; \
+			if gh variable get "$(STATE_BACKUP_VARIABLE)" > "$$tmp_state" 2>/dev/null && [[ -s "$$tmp_state" ]]; then \
+				mv "$$tmp_state" "$(STATE_FILE)"; \
+				chmod 600 "$(STATE_FILE)"; \
+				echo "Restored $(STATE_FILE) from GitHub repository variable $(STATE_BACKUP_VARIABLE)."; \
+				ALBANY_STATE_RESTORE_ATTEMPTED=1 make provision; \
+				exit "$$?"; \
+			fi; \
+			rm -f "$$tmp_state"; \
+		else \
+			echo "GitHub CLI is not available or authenticated; skipping remote state restore."; \
+		fi; \
+	fi
 	@[[ ! -f "$(STATE_FILE)" ]] || echo "Loaded $(STATE_FILE)"
 
 	@az extension add --name communication --upgrade;
@@ -69,7 +85,16 @@ provision:
 		"export ACS_CONNECTION_STRING=\"$$ACS_CONNECTION_STRING\"" \
 		"export COGNITIVE_SERVICES_ENDPOINT=\"$$COGNITIVE_SERVICES_ENDPOINT\"" \
 		"export PHONE_NUMBER=\"$(PHONE_NUMBER)\"" \
-		> "$(STATE_FILE)"
+		> "$(STATE_FILE)" && \
+	chmod 600 "$(STATE_FILE)"
+
+	@if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then \
+		grep -E '^export (PROJECT_SUFFIX|RESOURCE_GROUP_NAME|LOCATION|ACS_NAME|AI_SERVICES_NAME|AI_SERVICES_CUSTOM_DOMAIN|EVENT_SUBSCRIPTION_NAME|TUNNEL_SUBDOMAIN|CALLBACK_BASE_URL)=' "$(STATE_FILE)" | gh variable set "$(STATE_BACKUP_VARIABLE)" >/dev/null && \
+			echo "Saved reusable resource state to GitHub repository variable $(STATE_BACKUP_VARIABLE)." || \
+			echo "Warning: failed to save reusable resource state to GitHub repository variable $(STATE_BACKUP_VARIABLE)." >&2; \
+	else \
+		echo "GitHub CLI is not available or authenticated; skipping remote state backup."; \
+	fi
 
 	@subscription_id="$$(az account show --query id -o tsv)"; \
 	source_id="/subscriptions/$$subscription_id/resourceGroups/$(RESOURCE_GROUP_NAME)/providers/Microsoft.Communication/communicationServices/$(ACS_NAME)"; \
