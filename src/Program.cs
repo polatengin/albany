@@ -1,8 +1,4 @@
-﻿using System.Text.Json;
-using Azure.Communication.CallAutomation;
-using Microsoft.AspNetCore.HttpOverrides;
-
-var builder = WebApplication.CreateBuilder(args);
+﻿var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration["ACS_CONNECTION_STRING"];
 if (string.IsNullOrWhiteSpace(connectionString))

@@ -8,6 +8,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Using Include="System.Text.Json" />
+    <Using Include="Azure.Communication.CallAutomation" />
+    <Using Include="Microsoft.AspNetCore.HttpOverrides" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Communication.CallAutomation" Version="1.6.0" />
     <PackageReference Include="Azure.Communication.Common" Version="1.4.0" />
   </ItemGroup>
