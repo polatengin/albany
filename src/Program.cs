@@ -1,29 +1,6 @@
-﻿var builder = WebApplication.CreateBuilder(args);
+﻿var app = AlbanyApplication.Create(args);
 
-var connectionString = builder.Configuration["ACS_CONNECTION_STRING"];
-if (string.IsNullOrWhiteSpace(connectionString))
-{
-  throw new InvalidOperationException("ACS_CONNECTION_STRING is required. Run 'make provision' first.");
-}
-
-var speechOptions = new SpeechOptions(
-  builder.Configuration["COGNITIVE_SERVICES_ENDPOINT"],
-  builder.Configuration["TTS_VOICE_NAME"] ?? "en-US-JennyNeural",
-  builder.Configuration["SPEECH_LOCALE"] ?? "en-US",
-  bool.TryParse(builder.Configuration["ENABLE_TRANSCRIPTION"], out var enableTranscription) && enableTranscription);
-
-builder.Services.Configure<ForwardedHeadersOptions>(options =>
-{
-  options.ForwardedHeaders = ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedProto;
-});
-builder.Services.AddSingleton(new CallAutomationClient(connectionString));
-builder.Services.AddSingleton(speechOptions);
-
-var app = builder.Build();
-
-app.UseForwardedHeaders();
-
-app.MapGet("/", () => Results.Ok(new
+app.MapGet("/", (SpeechOptions speechOptions) => Results.Ok(new
 {
   service = "albany-call-listener",
   incomingCallWebhook = "/api/incoming-call",
@@ -300,19 +277,3 @@ sealed class CallLine
   }
 }
 
-sealed record SpeechOptions(string? CognitiveServicesEndpoint, string VoiceName, string SpeechLocale, bool EnableTranscription)
-{
-  public bool HasCognitiveServicesEndpoint => !string.IsNullOrWhiteSpace(CognitiveServicesEndpoint);
-
-  public bool TryGetCognitiveServicesEndpoint(out Uri cognitiveServicesEndpoint)
-  {
-    if (!string.IsNullOrWhiteSpace(CognitiveServicesEndpoint) &&
-      Uri.TryCreate(CognitiveServicesEndpoint, UriKind.Absolute, out cognitiveServicesEndpoint!))
-    {
-      return true;
-    }
-
-    cognitiveServicesEndpoint = null!;
-    return false;
-  }
-}
