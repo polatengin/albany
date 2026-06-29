@@ -113,16 +113,20 @@ provision:
 		echo "Using event grid subscription $(EVENT_SUBSCRIPTION_NAME)"; \
 		exit 0; \
 	fi; \
-	if [[ -f "$(TUNNEL_PID_FILE)" ]] && kill -0 "$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null; then \
-		kill "$$(cat "$(TUNNEL_PID_FILE)")"; \
-	fi; \
+	stop_tunnel() { \
+		if [[ -f "$(TUNNEL_PID_FILE)" ]] && kill -0 "$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null; then \
+			kill -- "-$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null || kill "$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null || true; \
+		fi; \
+		pkill -TERM -f -- 'node .*/[l]t --port $(PORT) --subdomain $(TUNNEL_SUBDOMAIN)' 2>/dev/null || true; \
+	}; \
+	stop_tunnel; \
 	rm -f "$(TUNNEL_LOG)" "$(TUNNEL_PID_FILE)"; \
-	npx localtunnel --port "$(PORT)" --subdomain "$(TUNNEL_SUBDOMAIN)" > "$(TUNNEL_LOG)" 2>&1 & \
+	setsid npx localtunnel --port "$(PORT)" --subdomain "$(TUNNEL_SUBDOMAIN)" > "$(TUNNEL_LOG)" 2>&1 & \
 	tunnel_pid="$$!"; \
 	app_pid=""; \
 	cleanup() { \
 		[[ -z "$${app_pid:-}" ]] || kill "$$app_pid" 2>/dev/null || true; \
-		[[ -z "$${tunnel_pid:-}" ]] || kill "$$tunnel_pid" 2>/dev/null || true; \
+		[[ -z "$${tunnel_pid:-}" ]] || kill -- "-$$tunnel_pid" 2>/dev/null || kill "$$tunnel_pid" 2>/dev/null || true; \
 		rm -f "$(TUNNEL_PID_FILE)"; \
 	}; \
 	trap cleanup EXIT INT TERM; \
@@ -167,17 +171,21 @@ run:
 	@[[ -f "$(STATE_FILE)" ]] || { echo "Run 'make provision' first." >&2; exit 1; }
 
 	@source "$(STATE_FILE)"; \
-	if [[ -f "$(TUNNEL_PID_FILE)" ]] && kill -0 "$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null; then \
-		kill "$$(cat "$(TUNNEL_PID_FILE)")"; \
-	fi; \
+	stop_tunnel() { \
+		if [[ -f "$(TUNNEL_PID_FILE)" ]] && kill -0 "$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null; then \
+			kill -- "-$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null || kill "$$(cat "$(TUNNEL_PID_FILE)")" 2>/dev/null || true; \
+		fi; \
+		pkill -TERM -f -- 'node .*/[l]t --port $(PORT) --subdomain $(TUNNEL_SUBDOMAIN)' 2>/dev/null || true; \
+	}; \
+	stop_tunnel; \
 	rm -f "$(TUNNEL_LOG)" "$(TUNNEL_PID_FILE)"; \
 	callback_base_url="$(CALLBACK_BASE_URL)"; \
-	npx localtunnel --port "$(PORT)" --subdomain "$(TUNNEL_SUBDOMAIN)" > "$(TUNNEL_LOG)" 2>&1 & \
+	setsid npx localtunnel --port "$(PORT)" --subdomain "$(TUNNEL_SUBDOMAIN)" > "$(TUNNEL_LOG)" 2>&1 & \
 	tunnel_pid="$$!"; \
 	app_pid=""; \
 	cleanup() { \
 		[[ -z "$${app_pid:-}" ]] || kill "$$app_pid" 2>/dev/null || true; \
-		[[ -z "$${tunnel_pid:-}" ]] || kill "$$tunnel_pid" 2>/dev/null || true; \
+		[[ -z "$${tunnel_pid:-}" ]] || kill -- "-$$tunnel_pid" 2>/dev/null || kill "$$tunnel_pid" 2>/dev/null || true; \
 		rm -f "$(TUNNEL_PID_FILE)"; \
 	}; \
 	trap cleanup EXIT INT TERM; \
