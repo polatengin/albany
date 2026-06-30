@@ -1,5 +1,8 @@
 static class AlbanyApplication
 {
+  private static readonly ConcurrentDictionary<string, TaskCompletionSource<object?>> PlayOperations = new();
+  private static readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> RecognitionOperations = new();
+
   public static WebApplication Create(string[] args)
   {
     var builder = WebApplication.CreateBuilder(args);
@@ -13,8 +16,7 @@ static class AlbanyApplication
     var speechOptions = new SpeechOptions(
       builder.Configuration["COGNITIVE_SERVICES_ENDPOINT"],
       builder.Configuration["TTS_VOICE_NAME"] ?? "en-US-JennyNeural",
-      builder.Configuration["SPEECH_LOCALE"] ?? "en-US",
-      bool.TryParse(builder.Configuration["ENABLE_TRANSCRIPTION"], out var enableTranscription) && enableTranscription);
+      builder.Configuration["SPEECH_LOCALE"] ?? "en-US");
 
     builder.Services.Configure<ForwardedHeadersOptions>(options =>
     {
@@ -126,21 +128,35 @@ static class AlbanyApplication
           continue;
         }
 
-        if (eventType is "Microsoft.Communication.PlayCompleted" or "Microsoft.Communication.PlayStarted")
+        if (eventType == "Microsoft.Communication.PlayStarted")
         {
           logger.LogInformation("Text-to-speech event payload: {Payload}", eventElement.GetRawText());
           continue;
         }
 
+        if (eventType == "Microsoft.Communication.PlayCompleted")
+        {
+          CompletePlayOperation(eventElement);
+          logger.LogInformation("Text-to-speech completed: {Payload}", eventElement.GetRawText());
+          continue;
+        }
+
         if (eventType == "Microsoft.Communication.PlayFailed")
         {
+          FailPlayOperation(eventElement, "Text-to-speech failed.");
           logger.LogWarning("Text-to-speech failed: {Payload}", eventElement.GetRawText());
           continue;
         }
 
         if (eventType == "Microsoft.Communication.RecognizeCompleted")
         {
-          logger.LogInformation("Speech recognition completed: {Payload}", eventElement.GetRawText());
+          var recognizedSpeech = GetRecognizedSpeech(eventElement);
+          CompleteRecognitionOperation(eventElement, recognizedSpeech);
+          logger.LogInformation("Speech recognition completed: {RecognizedSpeech}", recognizedSpeech ?? "(nothing recognized)");
+          if (string.IsNullOrWhiteSpace(recognizedSpeech))
+          {
+            logger.LogInformation("Speech recognition completed without text. Payload: {Payload}", eventElement.GetRawText());
+          }
           continue;
         }
 
@@ -152,6 +168,7 @@ static class AlbanyApplication
 
         if (eventType is "Microsoft.Communication.RecognizeFailed" or "Microsoft.Communication.RecognizeCanceled")
         {
+          FailRecognitionOperation(eventElement, "Speech recognition failed or was canceled.");
           logger.LogWarning("Speech recognition event: {Payload}", eventElement.GetRawText());
         }
       }
@@ -160,6 +177,99 @@ static class AlbanyApplication
     });
 
     return app;
+  }
+
+  internal static async Task WaitForPlayCompletedAsync(string operationContext, Func<Task> startPlay)
+  {
+    var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+    if (!PlayOperations.TryAdd(operationContext, completion))
+    {
+      throw new InvalidOperationException($"A play operation already exists for operation context '{operationContext}'.");
+    }
+
+    try
+    {
+      await startPlay();
+      using var timeout = CreateOperationTimeout(operationContext, PlayOperations, completion);
+      await completion.Task;
+    }
+    finally
+    {
+      PlayOperations.TryRemove(operationContext, out _);
+    }
+  }
+
+  internal static async Task<string?> WaitForRecognizedSpeechAsync(string operationContext, Func<Task> startRecognition)
+  {
+    var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+    if (!RecognitionOperations.TryAdd(operationContext, completion))
+    {
+      throw new InvalidOperationException($"A recognition operation already exists for operation context '{operationContext}'.");
+    }
+
+    try
+    {
+      await startRecognition();
+      using var timeout = CreateOperationTimeout(operationContext, RecognitionOperations, completion);
+      return await completion.Task;
+    }
+    finally
+    {
+      RecognitionOperations.TryRemove(operationContext, out _);
+    }
+  }
+
+  private static CancellationTokenSource CreateOperationTimeout<T>(
+    string operationContext,
+    ConcurrentDictionary<string, TaskCompletionSource<T>> operations,
+    TaskCompletionSource<T> completion)
+  {
+    var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+    timeout.Token.Register(() =>
+    {
+      if (operations.TryRemove(operationContext, out _))
+      {
+        completion.TrySetException(new TimeoutException($"Timed out waiting for operation context '{operationContext}'."));
+      }
+    });
+
+    return timeout;
+  }
+
+  private static void CompletePlayOperation(JsonElement eventElement)
+  {
+    if (TryGetOperationContext(eventElement, out var operationContext) &&
+      PlayOperations.TryRemove(operationContext, out var completion))
+    {
+      completion.TrySetResult(null);
+    }
+  }
+
+  private static void FailPlayOperation(JsonElement eventElement, string message)
+  {
+    if (TryGetOperationContext(eventElement, out var operationContext) &&
+      PlayOperations.TryRemove(operationContext, out var completion))
+    {
+      completion.TrySetException(new InvalidOperationException(message));
+    }
+  }
+
+  private static void CompleteRecognitionOperation(JsonElement eventElement, string? recognizedSpeech)
+  {
+    if (TryGetOperationContext(eventElement, out var operationContext) &&
+      RecognitionOperations.TryRemove(operationContext, out var completion))
+    {
+      completion.TrySetResult(recognizedSpeech);
+    }
+  }
+
+  private static void FailRecognitionOperation(JsonElement eventElement, string message)
+  {
+    if (TryGetOperationContext(eventElement, out var operationContext) &&
+      RecognitionOperations.TryRemove(operationContext, out var completion))
+    {
+      completion.TrySetException(new InvalidOperationException(message));
+    }
   }
 
   private static async Task<JsonDocument> ReadJsonBodyAsync(HttpRequest request)
@@ -232,6 +342,77 @@ static class AlbanyApplication
     return !string.IsNullOrWhiteSpace(callConnectionId);
   }
 
+  private static bool TryGetOperationContext(JsonElement eventElement, out string operationContext)
+  {
+    operationContext = string.Empty;
+
+    if (!eventElement.TryGetProperty("data", out var data) ||
+      !data.TryGetProperty("operationContext", out var operationContextElement))
+    {
+      return false;
+    }
+
+    operationContext = operationContextElement.GetString() ?? string.Empty;
+    return !string.IsNullOrWhiteSpace(operationContext);
+  }
+
+  private static string? GetRecognizedSpeech(JsonElement eventElement)
+  {
+    try
+    {
+      var recognizeCompleted = RecognizeCompleted.Deserialize(eventElement.GetRawText());
+      if (recognizeCompleted.RecognizeResult is SpeechResult speechResult &&
+        !string.IsNullOrWhiteSpace(speechResult.Speech))
+      {
+        return speechResult.Speech;
+      }
+    }
+    catch (JsonException)
+    {
+    }
+
+    if (!eventElement.TryGetProperty("data", out var data))
+    {
+      return null;
+    }
+
+    return FindStringProperty(data, "speech");
+  }
+
+  private static string? FindStringProperty(JsonElement element, string propertyName)
+  {
+    if (element.ValueKind == JsonValueKind.Object)
+    {
+      foreach (var property in element.EnumerateObject())
+      {
+        if (property.NameEquals(propertyName) && property.Value.ValueKind == JsonValueKind.String)
+        {
+          return property.Value.GetString();
+        }
+
+        var nestedValue = FindStringProperty(property.Value, propertyName);
+        if (!string.IsNullOrWhiteSpace(nestedValue))
+        {
+          return nestedValue;
+        }
+      }
+    }
+
+    if (element.ValueKind == JsonValueKind.Array)
+    {
+      foreach (var item in element.EnumerateArray())
+      {
+        var nestedValue = FindStringProperty(item, propertyName);
+        if (!string.IsNullOrWhiteSpace(nestedValue))
+        {
+          return nestedValue;
+        }
+      }
+    }
+
+    return null;
+  }
+
   private static Uri BuildCallbackUri(HttpRequest request, IConfiguration configuration)
   {
     var configuredBaseUrl = configuration["CALLBACK_BASE_URL"];
@@ -270,45 +451,84 @@ sealed class CallLine
       return;
     }
 
-    var playSource = new TextSource(text, speechOptions.VoiceName);
+    var operationContext = NewOperationContext("greeting");
+    var playOptions = new PlayToAllOptions(new TextSource(text, speechOptions.VoiceName))
+    {
+      OperationContext = operationContext
+    };
     var callMedia = callAutomationClient
       .GetCallConnection(callConnectionId)
       .GetCallMedia();
 
-    await callMedia.PlayToAllAsync(playSource);
+    await AlbanyApplication.WaitForPlayCompletedAsync(
+      operationContext,
+      async () => await callMedia.PlayToAllAsync(playOptions));
 
-    logger.LogInformation("Started greeting playback on call {CallConnectionId} with voice {VoiceName}.", callConnectionId, speechOptions.VoiceName);
+    logger.LogInformation("Completed greeting playback on call {CallConnectionId} with voice {VoiceName}.", callConnectionId, speechOptions.VoiceName);
   }
 
-  public async Task ListenToOtherSide()
+  public async Task<string?> ListenToOtherSide()
   {
     if (!speechOptions.HasCognitiveServicesEndpoint)
     {
       logger.LogWarning("Skipping listening because COGNITIVE_SERVICES_ENDPOINT is not configured.");
-      return;
+      return null;
     }
 
-    if (!speechOptions.EnableTranscription)
+    var callConnection = callAutomationClient.GetCallConnection(callConnectionId);
+    var participants = (await callConnection.GetParticipantsAsync()).Value;
+    var targetParticipant = participants.FirstOrDefault()?.Identifier;
+    if (targetParticipant is null)
     {
-      logger.LogInformation("Skipping listening because ENABLE_TRANSCRIPTION is not true.");
-      return;
+      logger.LogWarning("Skipping listening because the call has no active participant to recognize.");
+      return null;
     }
 
+    var operationContext = NewOperationContext("listen");
+    var recognizeOptions = new CallMediaRecognizeSpeechOptions(targetParticipant)
+    {
+      OperationContext = operationContext,
+      SpeechLanguage = speechOptions.SpeechLocale,
+      InitialSilenceTimeout = TimeSpan.FromSeconds(20),
+      EndSilenceTimeout = TimeSpan.FromSeconds(2)
+    };
     var callMedia = callAutomationClient
       .GetCallConnection(callConnectionId)
       .GetCallMedia();
 
-    await callMedia.StartTranscriptionAsync(new StartTranscriptionOptions
-    {
-      Locale = speechOptions.SpeechLocale,
-      OperationContext = "default-transcription"
-    });
+    logger.LogInformation("Listening for speech on call {CallConnectionId}.", callConnectionId);
 
-    logger.LogInformation("Started speech transcription on call {CallConnectionId} with locale {SpeechLocale}.", callConnectionId, speechOptions.SpeechLocale);
+    string? recognizedSpeech;
+    try
+    {
+      recognizedSpeech = await AlbanyApplication.WaitForRecognizedSpeechAsync(
+        operationContext,
+        async () => await callMedia.StartRecognizingAsync(recognizeOptions));
+    }
+    catch (Azure.RequestFailedException exception)
+    {
+      logger.LogWarning(exception, "Could not start speech recognition on call {CallConnectionId}.", callConnectionId);
+      return null;
+    }
+    catch (InvalidOperationException exception)
+    {
+      logger.LogWarning(exception, "Speech recognition did not complete on call {CallConnectionId}.", callConnectionId);
+      return null;
+    }
+    catch (TimeoutException exception)
+    {
+      logger.LogWarning(exception, "Speech recognition timed out on call {CallConnectionId}.", callConnectionId);
+      return null;
+    }
+
+    logger.LogInformation("Recognized speech on call {CallConnectionId}: {RecognizedSpeech}", callConnectionId, recognizedSpeech ?? "(nothing recognized)");
+    return recognizedSpeech;
   }
+
+  private static string NewOperationContext(string name) => $"{name}-{Guid.NewGuid():N}";
 }
 
-sealed record SpeechOptions(string? CognitiveServicesEndpoint, string VoiceName, string SpeechLocale, bool EnableTranscription)
+sealed record SpeechOptions(string? CognitiveServicesEndpoint, string VoiceName, string SpeechLocale)
 {
   public bool HasCognitiveServicesEndpoint => !string.IsNullOrWhiteSpace(CognitiveServicesEndpoint);
 
