@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Using Include="System.Collections.Concurrent" />
     <Using Include="System.Text.Json" />
     <Using Include="Azure.Communication.CallAutomation" />
     <Using Include="Microsoft.AspNetCore.HttpOverrides" />
