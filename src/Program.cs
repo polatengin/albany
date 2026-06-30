@@ -7,5 +7,8 @@ app.Run();
 static async Task IncomingCall(CallLine line)
 {
   await line.SendGreetingMessage("Hello from Albany. Your call is connected.");
-  await line.ListenToOtherSide();
+
+  var whatTheySaid = await line.ListenToOtherSide();
+
+  Console.WriteLine($"Other side said: {whatTheySaid ?? "(nothing recognized)"}");
 }
